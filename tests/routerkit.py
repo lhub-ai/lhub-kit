@@ -12,9 +12,20 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import lhub
 
 Router = Callable[[str, dict[str, Any]], dict[str, Any]]
+
+
+def use_kit(monkeypatch: pytest.MonkeyPatch, kit: lhub.Kit) -> None:
+    """Make every ``Kit.from_env()`` (the CLI and the MCP tools) return ``kit``."""
+
+    def from_env(base_url: str | None = None) -> lhub.Kit:
+        return kit
+
+    monkeypatch.setattr(lhub.Kit, "from_env", staticmethod(from_env))
 
 
 class RouterKit(lhub.Kit):

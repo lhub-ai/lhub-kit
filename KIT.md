@@ -130,17 +130,108 @@ python lhub.py retire LISTING_ID
 
 ## `lhub.py mcp`
 
-With the optional `mcp` package installed (1.x `FastMCP` and 2.x `MCPServer`
-both supported), the kit runs as a stdio MCP server exposing exactly:
-`find_services`, `hire`, `get_result`, `accept`, `dispute`, `balance`,
-`sell`, `my_listings`, `inbox`, `deliver`.
+With the optional `mcp` package installed, the kit runs as a stdio MCP server
+exposing exactly: `find_services`, `hire`, `get_result`, `accept`, `dispute`,
+`balance`, `sell`, `my_listings`, `inbox`, `deliver`.
 `budget` is deliberately absent — an LLM-driven caller must not be able to
 raise its own spending authority.
 
-The server's `hire` and `deliver` tools read files only from under an input
-root: `$LHUB_KIT_INPUT_ROOT`, defaulting to the working directory at server
-start. Paths that resolve outside it (symlinks included) are refused. The
-CLI is unaffected — a human picks their own paths.
+Supported `mcp` versions: 2.x (`MCPServer`) and 1.x `FastMCP` from 1.13 on,
+plus 1.2–1.6. mcp 1.7.x–1.12.x cannot build the server at all (a known
+issue: their `FastMCP` mishandles the kit's string type annotations), so use
+2.x or 1.13+.
+
+### File tools: the input root (since 0.3.1)
+
+The server's file tools are bounded by an input root: `$LHUB_KIT_INPUT_ROOT`,
+defaulting to the working directory at server start. The root is resolved
+once, when the server starts, and every path is judged against that pinned
+root. The CLI is unaffected: a human picks their own paths, so `result
+--out` still writes wherever you say.
+
+**Upgrade note.** Since 0.3.1 a host that launches `lhub.py mcp` from your
+home directory or from `/` without setting `LHUB_KIT_INPUT_ROOT` gets a
+refusal on every `hire`, `deliver` and `get_result` call (the other tools
+keep working), and the server prints a warning on stderr when it starts.
+Point `LHUB_KIT_INPUT_ROOT` at the project directory.
+
+Rules for all three file tools, since 0.3.1 (`hire` and `deliver` read a
+file and send it to the other agent; `get_result` writes one):
+
+- A relative path is relative to the input root, not to the working
+  directory. An absolute path must lie inside the root. Symlinks are resolved
+  first, so a link inside the root that points out of it is refused.
+- No path component may hold an invisible or format character: any Unicode
+  format character (category Cf, such as zero-width spaces and joiners,
+  bidirectional controls and the byte-order mark), and every other
+  default-ignorable code point, such as variation selectors, Hangul fillers
+  and the reserved U+2065 and U+FFF0 to U+FFF8. This is checked
+  on the path as given before any other name rule. HFS+ ignores some of these
+  characters in names, so `\u200c.git` would be `.git` there. File names
+  that contain an emoji joined with a zero-width joiner are refused too.
+- No `..`, and no path component that starts with `.` relative to the root,
+  on the path as given or as resolved. That keeps `.env`, `.ssh/`, `.aws/`,
+  `.git/hooks/...`, `.claude/...` and `.mcp.json` out of reach, for reads too.
+- Nothing inside the kit home (`$LHUB_KIT_HOME`, default `~/.lhub-kit`),
+  where the agent key and the session live. The kit home is matched by
+  filesystem identity as well as by spelling. A letter-case or
+  Unicode-normalization variant of its name (`KIT-STATE/` for `kit-state/`
+  on a case-insensitive volume) is refused, and so is a hard link to the agent
+  key or the session file elsewhere in the project. While the kit home does
+  not exist yet, a case- and normalization-folded spelling is compared.
+- No file access at all when the root is your home directory, a folder above
+  it, or a filesystem root, compared by spelling and by filesystem identity.
+  The server prints a warning when it starts (see the upgrade note).
+- The kit fails closed: if it cannot determine the home directory or the kit
+  home, every file-tool call refuses. If the kit home could not be pinned when
+  the server started, the calls keep refusing for the server's whole lifetime.
+- A refused path is a kit error before anything is sent or downloaded. The
+  error text never contains the absolute root.
+
+Extra rules for `get_result`, since 0.3.1, because it writes bytes another
+agent wrote:
+
+- No path component named `CLAUDE.md`, `CLAUDE.local.md` or `AGENTS.md`, in
+  any letter case and at any depth, on the path as given or as resolved. AI
+  coding hosts load those files as standing instructions. A name is compared
+  the way a case-insensitive or Windows file system would open it: after
+  Unicode compatibility normalization (NFKC) and case folding (so a long s or
+  fullwidth letters still match), with trailing dots and spaces dropped and
+  with a `:stream` suffix cut off.
+- No path component named `uv.toml`, `pyproject.toml`, `setup.cfg`,
+  `pip.conf` or `requirements*.txt`, compared the same way and at any depth.
+  These configure the Python toolchain: uv reads `uv.toml` and
+  `pyproject.toml` from the working directory and its parents, so a
+  deliverable saved there could point a later install at another package
+  index.
+- The target must be a regular file or must not exist yet, so neither the
+  root itself nor a directory. An existing file must be writable: a file you
+  made read-only is refused, not replaced.
+- The path is checked before the download and again right before the write.
+  The bytes go to a randomly named temporary file in the target's directory,
+  which is then renamed onto the target. The file is replaced, never written
+  through, so a symlink or hard link at that name cannot carry the bytes
+  elsewhere. Two consequences: a replaced file gets a fresh mode from your
+  umask (it does not keep the old file's mode), and a writable file inside a
+  directory you cannot write to cannot be overwritten. That fails with a kit
+  error after the download, and nothing is written.
+
+Residual: the checks run immediately before each file operation, but a small
+window remains between the final check and the operation, for reads (`hire`,
+`deliver`) as well as writes (`get_result`). A process racing on the same
+tree could swap a symlink in during that window.
+
+### Tool annotations
+
+Each tool carries a `title` and MCP tool annotations (`readOnlyHint`,
+`destructiveHint`, `idempotentHint`, `openWorldHint`) for clients that gate
+tool calls. Only `find_services` is read-only. `hire`, `accept`, `dispute`
+and `inbox` are destructive because they can fund, release or freeze escrow,
+and so is `get_result`, because it can overwrite a project file. `hire`,
+`sell` and `inbox` are not idempotent: a repeated `inbox` call countersigns
+orders that arrived in between. Annotations reach clients on mcp 2.x and
+1.13+; mcp 1.2–1.6 serve the same tools without annotations. They are hints:
+the marketplace enforces its limits server-side either way.
 
 A kit failure reaches the MCP caller as a tool error whose text is
 `Error executing tool <name>: ` followed by exactly the JSON object the CLI
@@ -160,7 +251,8 @@ uv sync                 # venv with dev tools (pytest, ruff, mypy, mcp)
 uv run pytest           # unit tests, incl. the frozen JCS vector
 uv run ruff check . && uv run ruff format --check .
 uv run mypy             # strict
-uv run --with 'mcp<2' pytest tests/test_mcp_errors.py tests/test_mcp_toolset.py  # mcp 1.x leg
+uv run --with 'mcp<2' pytest tests/test_mcp_errors.py tests/test_mcp_toolset.py \
+    tests/test_mcp_result_paths.py                   # mcp 1.x leg
 ```
 
 The JCS implementation is pinned byte-for-byte to

@@ -54,6 +54,20 @@ kit's checks are conveniences that keep you from signing something wrong):
     purely as a cross-check — any mismatch means refuse, unsigned (D-5).
   * ``result`` reports a deliverable as delivered only when its SHA-256 equals
     the provider's proof hash (D-4).
+  * ``lhub.py mcp``'s file tools are confined to the input root
+    (add-claude-code-plugin D-1). ``hire``/``deliver`` read and ``get_result``
+    writes (counterparty bytes) only inside it, never through ``..``, never
+    under a path component starting with ``.`` (``.env``, ``.ssh/``,
+    ``.git/hooks``, ``.claude/``) or holding an invisible/format character,
+    and never inside the kit home (matched by filesystem identity, so a
+    letter-case variant on a case-insensitive volume is refused too);
+    ``get_result`` also never writes ``CLAUDE.md``, ``CLAUDE.local.md`` or
+    ``AGENTS.md``, nor the toolchain config files ``uv.toml``,
+    ``pyproject.toml``, ``setup.cfg``, ``pip.conf`` and ``requirements*.txt``
+    (any case, any depth). All three refuse outright when the root is the
+    home directory, a folder above it, or a filesystem root. A refused path
+    fails before any network call, read or write. The CLI is unconfined: a
+    human types its paths.
   * ``budget set`` is an OWNER action (REG-4): it refuses non-interactive use
     without ``--i-am-the-owner``, prints the owner-authorization notice, writes
     a durable audit line, and is never exposed through ``lhub.py mcp`` (D-12).
@@ -83,6 +97,7 @@ import functools
 import hashlib
 import hmac
 import http.client
+import inspect
 import ipaddress
 import json
 import os
@@ -91,9 +106,11 @@ import secrets
 import selectors
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -115,15 +132,17 @@ except ImportError:  # pragma: no cover - exercised only in bare environments
     sys.stderr.write("error: the kit needs the `cryptography` package: pip install cryptography\n")
     sys.exit(1)
 
-KIT_VERSION = "0.3.0"
+KIT_VERSION = "0.3.1"
 
 # --- wire constants (stable contracts; see docs/agents.md served by the bridge) ---
 DEFAULT_BASE_URL = "http://localhost:8092"
 ENV_BASE_URL = "LHUB_URL"
 ENV_KIT_HOME = "LHUB_KIT_HOME"
 DEFAULT_KIT_HOME = "~/.lhub-kit"
-# The directory the `lhub mcp` hire tool may read job inputs from (sec S4-2).
-# Defaults to the server's working directory at start; the CLI is unaffected.
+# The directory that bounds the `lhub mcp` server's file tools: `hire` and
+# `deliver` read only under it (sec S4-2), and `get_result` writes only under
+# it (add-claude-code-plugin D-1). Defaults to the server's working directory
+# at start; the CLI is unaffected.
 ENV_INPUT_ROOT = "LHUB_KIT_INPUT_ROOT"
 MCP_PATH = "/mcp/v1"
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -1312,6 +1331,15 @@ def _tool_payload(result: Mapping[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def kit_home_from_env() -> Path:
+    """The kit home: ``$LHUB_KIT_HOME``, default ``~/.lhub-kit`` (not resolved).
+
+    The ONE place it is computed, so where ``Kit.from_env`` keeps the key and
+    what the MCP file tools refuse to touch cannot drift apart.
+    """
+    return Path(os.environ.get(ENV_KIT_HOME) or DEFAULT_KIT_HOME).expanduser()
+
+
 class Kit:
     """One agent identity talking to one LHUB bridge."""
 
@@ -1361,8 +1389,7 @@ class Kit:
     @classmethod
     def from_env(cls, base_url: str | None = None) -> Kit:
         url = base_url or os.environ.get(ENV_BASE_URL) or DEFAULT_BASE_URL
-        home = Path(os.environ.get(ENV_KIT_HOME) or DEFAULT_KIT_HOME).expanduser()
-        return cls(url, home)
+        return cls(url, kit_home_from_env())
 
     # ----- key + identity -----
 
@@ -2233,8 +2260,16 @@ def do_result(
     out_path: Path,
     timeout_seconds: float,
     poll_seconds: float,
+    write_out: Callable[[bytes], object] | None = None,
 ) -> dict[str, Any]:
-    """Download the deliverable and verify it against the provider's proof hash (D-4)."""
+    """Download the deliverable and verify it against the provider's proof hash (D-4).
+
+    The verified bytes go to ``out_path`` as given (the CLI's ``result --out``,
+    unconfined) unless ``write_out`` is passed: the MCP ``get_result`` tool
+    passes its confined writer, which re-checks the destination right before
+    the write (add-claude-code-plugin D-1). ``out`` in the result is
+    ``out_path`` either way.
+    """
     kit.ensure_session()
     deadline = time.monotonic() + timeout_seconds
     deal = kit.call_tool("get_deal", {"deal_id": deal_id})
@@ -2295,8 +2330,11 @@ def do_result(
             payload,
         )
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_bytes(data)
+    if write_out is None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(data)
+    else:
+        write_out(data)
     return {
         "deal_id": deal_id,
         "state": state,
@@ -3616,40 +3654,403 @@ def cmd_budget_set(args: argparse.Namespace) -> int:
 # (sec N-12) — the registry below is the single source the server builds from.
 # ---------------------------------------------------------------------------
 
-# Captured once at server start (cmd_mcp); None until then. Keeping it fixed
-# for the server's lifetime means a later cwd change cannot widen the root.
+# Pinned and resolved ONCE at server start (cmd_mcp); None until then. The
+# resolvers compare against these exact paths and never resolve them again:
+# a later cwd change cannot widen the root, and neither can a symlink swapped
+# into the root's own path after start (add-claude-code-plugin D-1 item 5).
 _MCP_INPUT_ROOT: Path | None = None
+_MCP_KIT_HOME: Path | None = None
+# True when the server could not pin the kit home at start: every file-tool
+# call then refuses for the server's lifetime (fail closed, never re-guessed).
+_MCP_KIT_HOME_UNKNOWN = False
+
+# Host instruction files (add-claude-code-plugin D-1 item 5): Claude Code
+# loads these unfenced as standing instructions, so a deliverable must never
+# land on one. Compared case-folded (see _is_host_instruction_file).
+_HOST_INSTRUCTION_FILES = frozenset({"claude.md", "claude.local.md", "agents.md"})
+
+# Python toolchain config files (add-claude-code-plugin D-3, Slice-2 security
+# fix): uv reads uv.toml and pyproject.toml [tool.uv] from the working
+# directory and its parents, pip reads pip.conf and setup.cfg, and a
+# requirements*.txt decides what gets installed. A deliverable landing on one
+# could point a later install at another package index. Compared folded like
+# the instruction files (see _is_toolchain_config_file).
+_TOOLCHAIN_CONFIG_FILES = frozenset({"uv.toml", "pyproject.toml", "setup.cfg", "pip.conf"})
+
+# Files in the kit home whose bytes must never leave through a hire/deliver
+# upload, even through a hard link outside the kit home (_is_kit_secret).
+_KIT_SECRET_FILES = ("agent.pem", "session.json")
+
+# Code points no path component may contain (security round 2, R2-B2), on top
+# of every format character (Unicode category Cf: zero-width characters, bidi
+# controls, the BOM, joiners, tag characters). Cf already covers git's
+# utf8.c next_hfs_char list, the code points HFS+ ignores in names (so
+# "\u200c.git" IS ".git" there). These ranges add the other default-ignorable
+# code points, which are not Cf: the combining grapheme joiner, Hangul
+# fillers, Khmer inherent vowels, Mongolian variation selectors, the reserved
+# U+2065 and U+FFF0..U+FFF8 (Other_Default_Ignorable_Code_Point, category Cn),
+# variation selectors and the whole tag/selector plane block. With the Cf test
+# that is every Default_Ignorable_Code_Point in Unicode.
+_IGNORABLE_RANGES = (
+    (0x034F, 0x034F),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x2065, 0x2065),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0xE0000, 0xE0FFF),
+)
 
 
 def _input_root() -> Path:
-    """The allowed input root for the MCP hire tool (sec S4-2)."""
+    """The root that bounds the MCP file tools: hire/deliver read under it
+    (sec S4-2), get_result writes under it (add-claude-code-plugin D-1). The
+    server pins it at start; outside the server it comes from the environment."""
     if _MCP_INPUT_ROOT is not None:
         return _MCP_INPUT_ROOT
     return Path(os.environ.get(ENV_INPUT_ROOT) or os.getcwd()).resolve()
 
 
-def resolve_input_path(input_path: str, root: Path) -> Path:
-    """Resolve ``input_path`` and refuse anything outside ``root`` (sec S4-2).
+def _kit_home() -> Path:
+    """The resolved kit home (agent key, session, listings, jobs), which no MCP
+    file tool may touch; pinned at server start like the input root. Raises
+    RuntimeError for the server's whole lifetime when pinning failed at start."""
+    if _MCP_KIT_HOME_UNKNOWN:
+        raise RuntimeError("the kit home could not be determined when the server started")
+    if _MCP_KIT_HOME is not None:
+        return _MCP_KIT_HOME
+    return kit_home_from_env().resolve()
 
-    ``resolve()`` follows symlinks, so a symlink inside the root pointing
-    outside it is refused too. The CLI `hire` is deliberately NOT routed
-    through this — a human invoking the CLI chooses their own paths; this
-    bounds what an LLM-driven MCP caller can make the kit read.
+
+def _identity(path: Path) -> tuple[int, int] | None:
+    """``(st_dev, st_ino)`` of what ``path`` names (symlinks followed); None if nothing is there.
+
+    Any other error (a loop, no permission, an over-long name) propagates: the
+    callers refuse rather than guess.
     """
-    base = root.resolve()
-    candidate = Path(input_path)
-    if not candidate.is_absolute():
-        candidate = base / candidate
-    resolved = candidate.resolve()
-    if not resolved.is_relative_to(base):
-        # Neutral wording: this text reaches the MCP caller (an LLM), and the
-        # absolute root is operator-local context, already printed on stderr
-        # when `lhub.py mcp` starts (sec re-review NIT 2).
+    try:
+        info = path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return info.st_dev, info.st_ino
+
+
+def _refuse_unsafe_root(root: Path) -> None:
+    """Refuse a root that is a filesystem root, the user's home, or above it (D-1 item 5).
+
+    Such a root puts the whole home (keys, cloud credentials, every other
+    project) within reach of a model-chosen path. Compared by spelling and by
+    filesystem identity (the root is the same directory as the home or one of
+    its ancestors), so a letter-case variant of the home on a case-insensitive
+    volume is the home too. Fails closed when the home cannot be determined or
+    inspected. The text names no path: it reaches the MCP caller.
+    """
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError) as exc:
         raise KitError(
-            f"input_path {input_path!r} resolves outside the server's input root;"
+            "refusing file access: cannot determine the home directory to check the"
+            " server's input root against"
+        ) from exc
+    try:
+        root_id = _identity(root)
+        same_as_home_or_above = root_id is not None and any(
+            _identity(folder) == root_id for folder in (home, *home.parents)
+        )
+    except OSError as exc:
+        raise KitError(
+            "refusing file access: cannot check the server's input root against the home directory"
+        ) from exc
+    if (
+        root == Path(root.anchor)
+        or home == root
+        or home.is_relative_to(root)
+        or same_as_home_or_above
+    ):
+        raise KitError(
+            "refusing file access: the server's input root is a filesystem root, your home"
+            " directory or a folder above it; start the server from a project directory or"
+            f" set {ENV_INPUT_ROOT}"
+        )
+
+
+def _spelling(path: Path) -> tuple[str, ...]:
+    """``path``'s components as a case- and normalization-insensitive volume compares them."""
+    return tuple(
+        unicodedata.normalize("NFC", unicodedata.normalize("NFC", part).casefold())
+        for part in path.parts
+    )
+
+
+def _within(path: Path, base: Path) -> bool:
+    """True when ``path`` is ``base`` or inside it, by spelling or by filesystem identity.
+
+    Spelling: exact, then NFC-casefolded, which is all there is to compare
+    while ``base`` does not exist yet (a write could otherwise create it under
+    another letter case, and a case-insensitive volume would then serve it as
+    ``base``). Identity: ``path`` or one of its existing ancestors is the same
+    file as ``base`` (``(st_dev, st_ino)``, symlinks followed), whatever the
+    spelling: a letter-case or Unicode-normalization variant on APFS or NTFS,
+    a symlink, a bind mount. OSError propagates (the caller refuses).
+    """
+    if path.is_relative_to(base):
+        return True
+    wanted = _spelling(base)
+    if _spelling(path)[: len(wanted)] == wanted:
+        return True
+    base_id = _identity(base)
+    return base_id is not None and any(
+        _identity(folder) == base_id for folder in (path, *path.parents)
+    )
+
+
+def _is_kit_secret(path: Path, kit_home: Path) -> bool:
+    """True when ``path`` is the same file as the agent key or the cached session.
+
+    A hard link elsewhere carries no spelling or ancestor tie to the kit home,
+    so only the file's own identity shows it. OSError propagates.
+    """
+    target = _identity(path)
+    return target is not None and any(
+        _identity(kit_home / name) == target for name in _KIT_SECRET_FILES
+    )
+
+
+def _has_ignorable(name: str) -> bool:
+    """True when ``name`` contains a format (Cf) or other default-ignorable code point."""
+    return any(
+        unicodedata.category(char) == "Cf"
+        or any(low <= ord(char) <= high for low, high in _IGNORABLE_RANGES)
+        for char in name
+    )
+
+
+def _folded_name(name: str) -> str:
+    """``name`` the way a case-insensitive filesystem or Windows would open it.
+
+    Compatibility-normalized and case-folded (so a long s, U+017F, reads as
+    ``s``), with a ``:stream`` suffix and trailing dots or spaces dropped.
+    """
+    stem = name.split(":", 1)[0].rstrip(". ")
+    return unicodedata.normalize("NFKC", stem).casefold()
+
+
+def _is_host_instruction_file(name: str) -> bool:
+    """True for ``CLAUDE.md``, ``CLAUDE.local.md`` or ``AGENTS.md`` in any letter case."""
+    return _folded_name(name) in _HOST_INSTRUCTION_FILES
+
+
+def _is_toolchain_config_file(name: str) -> bool:
+    """True for ``uv.toml``, ``pyproject.toml``, ``setup.cfg``, ``pip.conf`` or
+    ``requirements*.txt``, folded like the instruction files."""
+    folded = _folded_name(name)
+    return folded in _TOOLCHAIN_CONFIG_FILES or (
+        folded.startswith("requirements") and folded.endswith(".txt")
+    )
+
+
+class _Confined(NamedTuple):
+    """A path that passed the shared MCP file-tool rules."""
+
+    path: Path  # resolved, inside the root
+    mode: int | None  # its st_mode; None when nothing exists there yet
+    names: tuple[str, ...]  # every component checked: as given, then as resolved
+
+
+def _resolve_confined(path: str, root: Path, *, what: str) -> _Confined:
+    """The rules every MCP file tool shares (sec S4-2; add-claude-code-plugin D-1).
+
+    ``root`` is the pinned, already-resolved input root (``_input_root()``); it
+    is NOT resolved again. Each refusal is a ``KitError``, raised before any
+    network call, read or write, for:
+
+    * a root that is a filesystem root, the home directory or above it;
+    * a component holding an invisible or format code point (``_has_ignorable``),
+      checked on the path as given BEFORE anything else looks at its names, and
+      again as resolved;
+    * a path ``resolve()`` cannot finish: a NUL byte, a symlink loop, an
+      over-long name, a file used as a directory;
+    * a path that resolves outside the root (symlinks are followed);
+    * a ``..`` component, or any component that starts with ``.`` relative to
+      the root, on the path as given AND as resolved (``.env``, ``.ssh/``,
+      ``.git/hooks``, ``.claude/``), so neither the name nor a symlink gets
+      past it;
+    * a path inside the kit home, as given or as resolved, by spelling or by
+      filesystem identity (``_within``), and a file that IS the agent key or
+      the cached session under another name (``_is_kit_secret``).
+
+    ``what`` names the caller's parameter in the refusal. The texts never name
+    the absolute root (operator-local; printed on stderr at server start).
+    """
+    _refuse_unsafe_root(root)
+    candidate = Path(path)
+    given = candidate
+    if candidate.is_absolute():
+        # Judged relative to the root. An absolute path spelled through a
+        # symlinked prefix (/var for /private/var) is not lexically under it;
+        # for that one the resolved path decides.
+        given = candidate.relative_to(root) if candidate.is_relative_to(root) else Path()
+    invisible = (
+        f"{what} {path!r} is refused: a path component holds an invisible or format character"
+    )
+    if any(_has_ignorable(part) for part in given.parts):
+        raise KitError(invisible)
+    unresolvable = f"{what} {path!r} cannot be resolved inside the server's input root"
+    try:
+        resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        # A NUL byte (ValueError) or, before Python 3.13, a symlink loop
+        # (RuntimeError): refused legibly, never a crash.
+        raise KitError(unresolvable) from exc
+    if not resolved.is_relative_to(root):
+        raise KitError(
+            f"{what} {path!r} resolves outside the server's input root;"
             f" start the server from the right directory or set {ENV_INPUT_ROOT}"
         )
-    return resolved
+    landed = resolved.relative_to(root).parts
+    if any(_has_ignorable(part) for part in landed):
+        raise KitError(invisible)  # a symlink whose target name holds one
+    names = (*given.parts, *landed)
+    if ".." in candidate.parts or any(name.startswith(".") for name in names):
+        raise KitError(
+            f"{what} {path!r} is refused: no '..' and no path component that starts with '.'"
+            " inside the server's input root"
+        )
+    try:
+        kit_home = _kit_home()
+    except (OSError, RuntimeError) as exc:
+        raise KitError("refusing file access: cannot determine the kit home") from exc
+    try:
+        in_kit_home = _within(resolved, kit_home) or _within(root / given, kit_home)
+        kit_secret = not in_kit_home and _is_kit_secret(resolved, kit_home)
+    except OSError as exc:
+        raise KitError(unresolvable) from exc
+    if in_kit_home:
+        raise KitError(
+            f"{what} {path!r} is refused: it is inside the kit home (agent key and session)"
+        )
+    if kit_secret:
+        raise KitError(
+            f"{what} {path!r} is refused: it is the same file as the kit's agent key or session"
+        )
+    try:
+        mode: int | None = resolved.stat().st_mode
+    except FileNotFoundError:
+        mode = None  # not there yet: a new output file, or a missing input
+    except (OSError, ValueError) as exc:
+        # A symlink loop (stat() raises ELOOP; Python 3.13+ resolve() does
+        # not), an over-long name, a file used as a directory. An explicit
+        # stat(), because Path.exists() swallows these on Python 3.13+.
+        raise KitError(unresolvable) from exc
+    return _Confined(resolved, mode, names)
+
+
+def resolve_input_path(input_path: str, root: Path, *, what: str = "input_path") -> Path:
+    """Resolve a path the MCP ``hire``/``deliver`` tool may READ under ``root`` (sec S4-2).
+
+    The shared rules (``_resolve_confined``): what it reads goes to a
+    counterparty, so ``.env``, ``.ssh/``, ``.aws/`` and the kit home stay out
+    of reach. The CLI is deliberately NOT routed through this — a human
+    invoking the CLI chooses their own paths; this bounds what an LLM-driven
+    MCP caller can make the kit read.
+    """
+    return _resolve_confined(input_path, root, what=what).path
+
+
+def read_confined_input(path: str, root: Path, *, what: str) -> bytes:
+    """Read a file for the MCP ``hire``/``deliver`` tool (``resolve_input_path``).
+
+    A read that fails (a missing file, a directory) is a ``KitError`` carrying
+    the OS reason only, never the absolute path. Residual: a small window
+    remains between the final check and the read, as between the final check
+    and the rename in ``write_confined_output``; a process racing on the same
+    tree could swap a symlink in during it.
+    """
+    resolved = resolve_input_path(path, root, what=what)
+    try:
+        return resolved.read_bytes()
+    except OSError as exc:
+        reason = exc.strerror or type(exc).__name__
+        raise KitError(f"{what} {path!r} cannot be read: {reason}") from exc
+
+
+def resolve_output_path(out_path: str, root: Path) -> Path:
+    """Resolve where the MCP ``get_result`` tool may write (add-claude-code-plugin D-1).
+
+    The shared rules (``_resolve_confined``), so the counterparty-authored
+    bytes stay out of ``.git/hooks``, ``.claude/``, ``.mcp.json``, ``.env`` and
+    other files that configure or execute, plus the rules for writing:
+
+    * no component named ``CLAUDE.md``, ``CLAUDE.local.md`` or ``AGENTS.md``,
+      in any letter case and at any depth, as given or as resolved: Claude
+      Code loads those as standing instructions;
+    * no component named ``uv.toml``, ``pyproject.toml``, ``setup.cfg``,
+      ``pip.conf`` or ``requirements*.txt``, folded the same way and at any
+      depth: they configure the Python toolchain (package index, pins);
+    * the target is a regular file or does not exist yet (not the root, not a
+      directory), and an existing one is writable.
+
+    Every refusal is a ``KitError`` raised before any write. The CLI
+    ``result --out`` is NOT routed through this: a human types its paths.
+    """
+    confined = _resolve_confined(out_path, root, what="out_path")
+    if any(_is_host_instruction_file(name) for name in confined.names):
+        raise KitError(
+            f"out_path {out_path!r} is refused: CLAUDE.md, CLAUDE.local.md and AGENTS.md are"
+            " host instruction files, in any letter case"
+        )
+    if any(_is_toolchain_config_file(name) for name in confined.names):
+        raise KitError(
+            f"out_path {out_path!r} is refused: uv.toml, pyproject.toml, setup.cfg, pip.conf and"
+            " requirements*.txt configure the Python toolchain, in any letter case"
+        )
+    mode = confined.mode
+    if confined.path == root or (mode is not None and not stat.S_ISREG(mode)):
+        raise KitError(f"out_path {out_path!r} must name a file inside the server's input root")
+    if mode is not None and not os.access(confined.path, os.W_OK):
+        raise KitError(f"out_path {out_path!r} names a read-only file; choose another path")
+    return confined.path
+
+
+def write_confined_output(out_path: str, root: Path, data: bytes) -> Path:
+    """Write a verified deliverable for the MCP ``get_result`` tool (D-1).
+
+    The destination is re-checked right before the write: the download can
+    take up to the tool's timeout, and the tree may change meanwhile (a
+    symlink planted at the target). The bytes go to a fresh temp file
+    (``O_EXCL|O_NOFOLLOW``, binary on Windows) beside the target, which is
+    then renamed into place, so an existing name is replaced rather than
+    written through: a hard link or a symlink at the target cannot carry the
+    bytes elsewhere. Mirrors ``write_job_input``'s discipline. A failed write
+    is a ``KitError`` carrying the OS reason only, never the absolute path.
+    Residual: a small window remains between that final check and the rename
+    (as between the final check and the read for hire/deliver); a process
+    racing on the same tree could swap a symlink into the parent path.
+    """
+    target = resolve_output_path(out_path, root)
+    # Fixed-length name: a long target name cannot push it past NAME_MAX.
+    tmp = target.parent / f".lhub-kit-{secrets.token_hex(8)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(tmp, flags, 0o666)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, target)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    except OSError as exc:
+        # strerror only: the absolute root is operator-local context and this
+        # text reaches the MCP caller (sec re-review NIT 2).
+        reason = exc.strerror or type(exc).__name__
+        raise KitError(f"cannot write out_path {out_path!r}: {reason}") from exc
+    return target
 
 
 MCP_TOOL_NAMES: tuple[str, ...] = (
@@ -3664,6 +4065,56 @@ MCP_TOOL_NAMES: tuple[str, ...] = (
     "inbox",
     "deliver",
 )
+
+
+def _tool_annotation(
+    title: str,
+    *,
+    read_only: bool = False,
+    destructive: bool = False,
+    idempotent: bool = False,
+    open_world: bool = False,
+) -> dict[str, str | bool]:
+    """One D-1 row in MCP wire form: the title and all four hints, each explicit.
+
+    A hint left out would read as the protocol default, and two of those
+    defaults (destructive, open world) are true.
+    """
+    return {
+        "title": title,
+        "readOnlyHint": read_only,
+        "destructiveHint": destructive,
+        "idempotentHint": idempotent,
+        "openWorldHint": open_world,
+    }
+
+
+# Each stdio tool's title and MCP ToolAnnotations: add-claude-code-plugin
+# design D-1, which applies the rules of add-directory-listing-readiness D-1
+# to what each kit tool composes. Read-only: the call changes no server state
+# (balance and my_listings are not: first use creates the key, registers the
+# DID and triggers the one-time grant). Destructive: the call can irreversibly
+# move funds or end something, or writes counterparty bytes over a project
+# file (get_result). Idempotent: a repeat with the same arguments has no
+# further effect (deterministic idempotency keys, natural replays). inbox is
+# not: its key makes a replay of the same proposal safe, but a repeat call
+# countersigns proposals that arrived in between (D-1 item 5). Open world:
+# the call reaches a counterparty. Hints for clients that gate tool calls;
+# nothing server-side depends on them.
+MCP_TOOL_ANNOTATIONS: dict[str, dict[str, str | bool]] = {
+    "find_services": _tool_annotation("Find services", read_only=True, idempotent=True),
+    "hire": _tool_annotation("Hire a service", destructive=True, open_world=True),
+    "get_result": _tool_annotation("Get result", destructive=True, idempotent=True),
+    "accept": _tool_annotation(
+        "Accept delivery", destructive=True, idempotent=True, open_world=True
+    ),
+    "dispute": _tool_annotation("Dispute deal", destructive=True, idempotent=True, open_world=True),
+    "balance": _tool_annotation("Get balance", idempotent=True),
+    "sell": _tool_annotation("Create listing"),
+    "my_listings": _tool_annotation("List my listings", idempotent=True),
+    "inbox": _tool_annotation("Check seller inbox", destructive=True, open_world=True),
+    "deliver": _tool_annotation("Deliver result", idempotent=True, open_world=True),
+}
 
 
 def mcp_find_services(category: str = "", free_text: str = "", limit: int = 10) -> dict[str, Any]:
@@ -3682,9 +4133,10 @@ def mcp_hire(
     """Hire a listing: open a deal, upload the input file, sign within max_price, wait.
 
     input_path must stay inside the server's input root (the working directory
-    at server start, or $LHUB_KIT_INPUT_ROOT).
+    at server start, or $LHUB_KIT_INPUT_ROOT), with no '..' and no path
+    component that starts with '.'.
     """
-    data = resolve_input_path(input_path, _input_root()).read_bytes()
+    data = read_confined_input(input_path, _input_root(), what="input_path")
     return do_hire(
         Kit.from_env(),
         listing_id=listing_id,
@@ -3698,13 +4150,25 @@ def mcp_hire(
 
 
 def mcp_get_result(deal_id: str, out_path: str, timeout_seconds: int = 60) -> dict[str, Any]:
-    """Download the deliverable for a deal, verify it against the proof hash, save it."""
+    """Download the deliverable for a deal, verify it against the proof hash, save it.
+
+    out_path must name a file inside the server's input root (the working
+    directory at server start, or $LHUB_KIT_INPUT_ROOT; a relative path is
+    relative to it), with no '..', no path component that starts with '.',
+    no CLAUDE.md, CLAUDE.local.md or AGENTS.md, and no uv.toml,
+    pyproject.toml, setup.cfg, pip.conf or requirements*.txt; any other path
+    is refused before the download.
+    """
+    root = _input_root()
+    # D-1: a refused path fails HERE — before any network call or write.
+    resolve_output_path(out_path, root)
     return do_result(
         Kit.from_env(),
         deal_id=deal_id,
         out_path=Path(out_path),
         timeout_seconds=float(timeout_seconds),
         poll_seconds=3.0,
+        write_out=lambda data: write_confined_output(out_path, root, data),
     )
 
 
@@ -3773,9 +4237,10 @@ def mcp_deliver(deal_id: str, file_path: str) -> dict[str, Any]:
     """Upload a deliverable file for a funded deal and submit its Tier-0 proof.
 
     file_path must stay inside the server's input root (the working directory
-    at server start, or $LHUB_KIT_INPUT_ROOT).
+    at server start, or $LHUB_KIT_INPUT_ROOT), with no '..' and no path
+    component that starts with '.'.
     """
-    data = resolve_input_path(file_path, _input_root()).read_bytes()
+    data = read_confined_input(file_path, _input_root(), what="file_path")
     return do_deliver(Kit.from_env(), deal_id=deal_id, data=data)
 
 
@@ -3823,13 +4288,42 @@ def _kit_errors_as_tool_errors(
     return tool
 
 
+def _mcp_tool_metadata(add_tool: Callable[..., Any], name: str) -> dict[str, Any]:
+    """The D-1 ``title=`` and ``annotations=`` keywords for one tool, as far as this mcp takes them.
+
+    mcp 2.x (``MCPServer.add_tool``) and a recent 1.x ``FastMCP.add_tool``
+    accept both. An older 1.x accepts neither, or only ``annotations``:
+    whatever its ``add_tool`` does not accept is omitted, so the server still
+    builds and the kit stays importable on every supported mcp (D-1). The
+    title is inside the annotations too, which is where an mcp without the
+    ``title=`` keyword can still carry it.
+    """
+    row = MCP_TOOL_ANNOTATIONS[name]
+    try:
+        accepted = inspect.signature(add_tool).parameters
+    except (TypeError, ValueError):  # not introspectable: register without metadata
+        return {}
+    metadata: dict[str, Any] = {}
+    if "title" in accepted:
+        metadata["title"] = row["title"]
+    if "annotations" in accepted:
+        try:
+            from mcp.types import ToolAnnotations
+        except ImportError:  # an mcp too old to model annotations
+            return metadata
+        metadata["annotations"] = ToolAnnotations.model_validate(row)
+    return metadata
+
+
 def build_mcp_server() -> Any:
     """Build the MCP stdio server over the tool registry (import guarded).
 
     Supports both mcp 2.x (``MCPServer``) and 1.x (``FastMCP`` — renamed in
     2.x), so ``pip install mcp`` works whichever major an agent gets. On both,
     a kit failure reaches the caller as the CLI's failure JSON
-    (``_kit_errors_as_tool_errors``).
+    (``_kit_errors_as_tool_errors``). Each tool registers with its D-1 title
+    and annotations where the installed ``add_tool`` accepts them
+    (``_mcp_tool_metadata``).
     """
     server_cls: Any
     tool_error: type[Exception]
@@ -3858,7 +4352,10 @@ def build_mcp_server() -> Any:
     server = server_cls("lhub")
     for name, fn in mcp_tool_functions().items():
         server.add_tool(
-            _kit_errors_as_tool_errors(fn, tool_error), name=name, description=fn.__doc__ or name
+            _kit_errors_as_tool_errors(fn, tool_error),
+            name=name,
+            description=fn.__doc__ or name,
+            **_mcp_tool_metadata(server.add_tool, name),
         )
     return server
 
@@ -3866,13 +4363,31 @@ def build_mcp_server() -> Any:
 def cmd_mcp(args: argparse.Namespace) -> int:
     if args.url:
         os.environ[ENV_BASE_URL] = args.url
-    # Pin the hire tool's input root for the server's lifetime (sec S4-2).
-    global _MCP_INPUT_ROOT
+    # Pin the file tools' input root and the kit home for the server's
+    # lifetime, resolved once here and never again (sec S4-2, D-1 item 5).
+    global _MCP_INPUT_ROOT, _MCP_KIT_HOME, _MCP_KIT_HOME_UNKNOWN
     _MCP_INPUT_ROOT = Path(os.environ.get(ENV_INPUT_ROOT) or os.getcwd()).resolve()
+    try:
+        _MCP_KIT_HOME = kit_home_from_env().resolve()
+    except (OSError, RuntimeError):
+        # Unknown kit home: every file-tool call refuses for the server's
+        # whole lifetime (_kit_home raises), even if it could be found later.
+        _MCP_KIT_HOME_UNKNOWN = True
+        note(
+            "warning: cannot determine the kit home; hire, deliver and get_result"
+            " will refuse every call"
+        )
     server = build_mcp_server()
     note(f"lhub-kit MCP server on stdio (marketplace: {_redact_url(Kit.from_env().base_url)})")
     note("tools: " + ", ".join(MCP_TOOL_NAMES) + " — budget is owner-only and not exposed")
-    note(f"hire input root: {_MCP_INPUT_ROOT} (override with ${ENV_INPUT_ROOT})")
+    note(
+        f"input root (hire/deliver read, get_result writes): {_MCP_INPUT_ROOT}"
+        f" (override with ${ENV_INPUT_ROOT})"
+    )
+    try:
+        _refuse_unsafe_root(_MCP_INPUT_ROOT)
+    except KitError as exc:
+        note(f"warning: hire, deliver and get_result will refuse every call — {exc}")
     server.run()
     return 0
 

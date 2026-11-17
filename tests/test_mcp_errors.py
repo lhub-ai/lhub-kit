@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from routerkit import RouterKit
+from routerkit import RouterKit, use_kit
 from test_hire_failure import DEAL_ID, LISTING_ID, FlowWorld, outage
 
 import lhub
@@ -70,13 +70,6 @@ def tool_error_text(tool: str, cli_stdout: str) -> str:
     return f"Error executing tool {tool}: {cli_stdout.removesuffix(chr(10))}"
 
 
-def use_kit(monkeypatch: pytest.MonkeyPatch, kit: lhub.Kit) -> None:
-    def from_env(base_url: str | None = None) -> lhub.Kit:
-        return kit
-
-    monkeypatch.setattr(lhub.Kit, "from_env", staticmethod(from_env))
-
-
 @pytest.fixture
 def input_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = (tmp_path / "inputs").resolve()
@@ -88,7 +81,7 @@ def input_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_plain_kit_error_reaches_the_caller_as_the_cli_json(input_root: Path) -> None:
     # The repro: pre-fix, 2.x callers saw exactly "Error executing tool deliver".
     with pytest.raises(lhub.KitError) as refused:
-        lhub.resolve_input_path("/etc/hosts", input_root)
+        lhub.resolve_input_path("/etc/hosts", input_root, what="file_path")
     is_error, text = call_tool("deliver", {"deal_id": DEAL_ID, "file_path": "/etc/hosts"})
     assert is_error
     assert text == tool_error_text("deliver", lhub.json_text({"error": str(refused.value)}))

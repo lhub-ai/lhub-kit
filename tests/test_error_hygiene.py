@@ -8,7 +8,7 @@ Since the D-4 ruling of 2026-11-16, every KitError reaches the operator's LLM th
   2. the marketplace URL's userinfo (``user:pass@``) never appears in an error: every
      rendering is redacted, and urllib's own exception text — which can embed a
      credentialed host — is scrubbed. (The input-root wording is pinned in
-     ``test_local_checks.py`` and ``test_mcp_errors.py``.)
+     ``test_local_checks.py``, ``test_mcp_errors.py`` and ``test_mcp_result_paths.py``.)
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from routerkit import RouterKit
-from test_mcp_errors import call_tool, use_kit
+from routerkit import RouterKit, use_kit
+from test_mcp_errors import call_tool
 from test_retryable import FakeResponse
 
 import lhub
@@ -85,13 +85,23 @@ def test_invalid_proof_hash_is_never_echoed(tmp_path: Path) -> None:
 def test_invalid_proof_hash_never_reaches_the_mcp_caller(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    use_kit(monkeypatch, hostile_proof_kit(tmp_path))
-    is_error, text = call_tool(
-        "get_result", {"deal_id": DEAL_ID, "out_path": str(tmp_path / "deliverable")}
-    )
+    # The out_path is inside the server's input root (add-claude-code-plugin
+    # D-1), so the refusal below is the proof-hash check's, not the path rule's:
+    # without the root, get_result refuses the path before any call and this
+    # test would pass for the wrong reason.
+    root = (tmp_path / "project").resolve()
+    root.mkdir()
+    monkeypatch.setattr(lhub, "_MCP_INPUT_ROOT", root)
+    kit = hostile_proof_kit(tmp_path)
+    use_kit(monkeypatch, kit)
+    is_error, text = call_tool("get_result", {"deal_id": DEAL_ID, "out_path": "deliverable"})
     assert is_error
     assert text.startswith("Error executing tool get_result: {")
+    payload = json.loads(text.removeprefix("Error executing tool get_result: "))
+    assert "not a sha256 reference" in payload["error"]
+    assert kit.calls_to("get_deal")  # it got past the path check to the proof
     assert_no_provider_text(text)
+    assert not (root / "deliverable").exists()
 
 
 # ---------------------------------------------------------------------------
