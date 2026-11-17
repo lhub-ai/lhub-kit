@@ -1,0 +1,2 @@
+# test_identity.py: a fixed, test-only P-256 scalar derived from the public string "lhub-kit-test-key-1" (documented in the test).
+tests/test_identity.py:generic-api-key:24

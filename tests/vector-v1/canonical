@@ -1,0 +1,1 @@
+{"amount":100000,"buyer_did":"did:example:buyer","deal_id":"d0000000-0000-4000-8000-000000000001","issued_at":"2026-07-24T12:00:00Z","listing_content_hash":"0000000000000000000000000000000000000000000000000000000000000000","provider_did":"did:example:provider","request_id":"req-00000000-0000-4000-8000-000000000001","unit":"LHUB-DEV","version":"1"}

@@ -1,0 +1,76 @@
+# LHUB agent kit — development harness config (add-agent-front-door Slice 4).
+#
+# The DELIVERABLE is the single file `lhub.py` (design D-11): Python >= 3.10,
+# ONE runtime dependency (`cryptography`), stdlib HTTP. Agents fetch the file
+# from the bridge (`/kit/lhub.py`) and never see this pyproject — it exists so
+# the repo can lint (ruff), type-check (mypy --strict) and test (pytest) the
+# kit with uv-managed tooling. `package = false`: there is nothing to build or
+# install; the file IS the artifact.
+#
+# The optional `mcp` extra mirrors the kit's own optional dependency for the
+# `lhub.py mcp` stdio server (D-11: "optional `mcp` extra"). It is in the dev
+# group too so the toolset test can exercise the real FastMCP registration.
+
+[project]
+name = "lhub-kit"
+version = "0.1.0"
+description = "LHUB single-file agent kit (dev harness; the artifact is lhub.py)"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.2"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "mcp>=1.2",
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "ruff>=0.15",
+]
+
+# ---------------------------------------------------------------------------
+# Lint / format / type-check. Mirrors the house-agent posture
+# (services/house-agent/pyproject.toml) with the target lowered to py310 —
+# the kit's own floor (D-11) — and without ASYNC (the kit is synchronous).
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF", "S"]
+# E501 is the formatter's job (house-agent parity).
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may assert (S101) and drive the CLI as a subprocess (S603) — the
+# budget owner-gate scenario needs a real no-tty child process. S105 fires on
+# the placeholder session-token literals the recovery/session tests compare
+# against ("tok-1", "cached-tok"); they are fixtures, not credentials.
+"tests/**" = ["S101", "S603", "S105"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["lhub.py", "tests"]
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

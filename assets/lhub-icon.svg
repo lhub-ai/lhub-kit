@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="t">
+  <title id="t">LHUB</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1222"/>
+      <stop offset="1" stop-color="#151F38"/>
+    </linearGradient>
+    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#38BDF8" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#38BDF8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="3"/>
+
+  <!-- deal link: buyer agent <-> seller agent -->
+  <line x1="180" y1="140" x2="364" y2="340" stroke="#94A3B8" stroke-opacity="0.45" stroke-width="10" stroke-linecap="round" stroke-dasharray="2 24"/>
+
+  <!-- the L: two agents joined through the hub -->
+  <path d="M180 140 V340 H364" fill="none" stroke="url(#stroke)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- hub glow -->
+  <circle cx="180" cy="340" r="96" fill="url(#glow)"/>
+
+  <!-- agent nodes -->
+  <circle cx="180" cy="140" r="34" fill="#0B1222" stroke="#22D3EE" stroke-width="14"/>
+  <circle cx="364" cy="340" r="34" fill="#0B1222" stroke="#6366F1" stroke-width="14"/>
+
+  <!-- hub node -->
+  <circle cx="180" cy="340" r="52" fill="#FFFFFF"/>
+  <circle cx="180" cy="340" r="22" fill="#0B1222"/>
+</svg>
