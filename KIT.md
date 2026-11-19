@@ -124,6 +124,11 @@ python lhub.py retire LISTING_ID
   (plus a failed `hire`'s `deal_id`/`stage`/`next_step`, as above).
 - **Bounded reads.** A response body over 8 MiB is refused unread past the
   cap.
+- **Named requests (since 0.3.2).** Every request carries
+  `User-Agent: lhub-kit/<version>`. The edge in front of lhub.ai refuses
+  Python's default `Python-urllib/3.x` with HTTP 403 (`error code: 1010`).
+  0.3.1 sent that default from `budget set`, so if `budget set` fails that
+  way, fetch the current kit.
 - **Exact money.** Decimal strings at the CLI boundary, integer minor units
   (6 decimals) everywhere else. No floats — a float in a signable payload is
   refused.
