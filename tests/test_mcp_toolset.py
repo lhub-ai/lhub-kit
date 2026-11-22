@@ -1,16 +1,21 @@
 """The `lhub.py mcp` stdio server toolset — budget is NEVER exposed (sec N-12) — and each
-tool's title and MCP annotations (add-claude-code-plugin design D-1)."""
+tool's title and MCP annotations (add-claude-code-plugin design D-1; the `owner_link` row
+is add-owner-confirm-link design D-11's)."""
 
 from __future__ import annotations
 
 import asyncio
 import importlib.metadata
 import inspect
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 import lhub
+
+KIT_README = Path(__file__).resolve().parents[1] / "README.md"
 
 EXPECTED_TOOLS = {
     # Buyer tools (add-agent-front-door D-11).
@@ -20,6 +25,8 @@ EXPECTED_TOOLS = {
     "accept",
     "dispute",
     "balance",
+    # The owner approval link (add-owner-confirm-link D-11, kit 0.3.3).
+    "owner_link",
     # Seller tools (add-agent-seller-door task 4.6).
     "sell",
     "my_listings",
@@ -42,6 +49,9 @@ D1_TABLE: dict[str, tuple[str, bool, bool, bool, bool]] = {
     # Not idempotent (D-1 item 5): a repeat countersigns proposals that arrived since.
     "inbox": ("Check seller inbox", False, True, False, True),
     "deliver": ("Deliver result", False, False, True, True),
+    # add-owner-confirm-link D-11 (the bridge's D-3 readings): every hint false. Not
+    # idempotent: a repeat replaces the deal's link. Not destructive: it moves no money.
+    "owner_link": ("Request owner confirmation link", False, False, False, False),
 }
 HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 # The MCP protocol default of an absent hint: what a client reads, so an
@@ -54,10 +64,21 @@ HINT_DEFAULTS = {
 }
 
 
-def test_registry_is_exactly_the_ten_kit_tools() -> None:
+def test_registry_is_exactly_the_eleven_kit_tools() -> None:
     functions = lhub.mcp_tool_functions()
     assert set(functions) == EXPECTED_TOOLS
     assert set(lhub.MCP_TOOL_NAMES) == EXPECTED_TOOLS
+    assert len(lhub.MCP_TOOL_NAMES) == len(EXPECTED_TOOLS) == 11
+
+
+def test_kit_readme_names_exactly_the_registry() -> None:
+    # The served /kit/README.md says which tools `lhub.py mcp` exposes; a tool added
+    # to the registry (owner_link, kit 0.3.3) must appear there too, and nothing else.
+    text = " ".join(KIT_README.read_text(encoding="utf-8").split())
+    _head, found, rest = text.partition("exposing exactly: ")
+    assert found, "the kit README no longer states the tools `lhub.py mcp` exposes"
+    listed = re.findall(r"`([^`]+)`", rest.partition(".")[0])
+    assert sorted(listed) == sorted(lhub.MCP_TOOL_NAMES)
 
 
 def test_registry_never_mentions_budget() -> None:
