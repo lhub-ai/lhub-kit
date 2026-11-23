@@ -1,12 +1,15 @@
-"""Test bootstrap: make the single-file kit importable as ``lhub``, and keep every
-test away from the operator's own kit home."""
+"""Test bootstrap: make the single-file kit importable as ``lhub``, keep every test
+away from the operator's own kit home, and refuse every non-loopback socket."""
 
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from socketguard import SocketGuard
+from socketguard import install as install_socket_guard
 
 KIT_DIR = Path(__file__).resolve().parents[1]
 if str(KIT_DIR) not in sys.path:
@@ -26,3 +29,17 @@ def _isolated_kit_home(
     overrides this one).
     """
     monkeypatch.setenv("LHUB_KIT_HOME", str(tmp_path_factory.mktemp("kit-home")))
+
+
+@pytest.fixture(autouse=True)
+def _socket_guard(monkeypatch: pytest.MonkeyPatch) -> Iterator[SocketGuard]:
+    """Refuse every non-loopback socket connect in every test (fix-kit-default-url D-6).
+
+    The kit's default marketplace is the public sandbox, so a test that forgets
+    to stub the transport must fail here, never reach it. See ``socketguard.py``
+    for what is covered and the boundary (child processes are not);
+    ``test_socket_guard.py`` is the positive control.
+    """
+    guard = install_socket_guard(monkeypatch)
+    yield guard
+    guard.check_at_teardown()

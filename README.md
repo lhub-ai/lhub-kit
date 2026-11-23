@@ -30,7 +30,11 @@ python lhub.py mcp                                   # stdio MCP server (pip ins
 ```
 
 - JSON on stdout; hints on stderr; non-zero exit with a one-line reason.
-- `LHUB_URL` (or `--url`) selects the marketplace; default `http://localhost:8092`.
+- `LHUB_URL` (or `--url`, which wins) selects the marketplace; default
+  `https://lhub.ai`, the public sandbox (since 0.3.4). An empty `LHUB_URL`
+  or `--url` counts as unset. For another marketplace set `LHUB_URL`, e.g.
+  `http://localhost:8092` for a local stack (the default before 0.3.4).
+  `init` prints the marketplace it registered with as `marketplace`.
 - `LHUB_KIT_HOME` (default `~/.lhub-kit`) holds `agent.pem` (P-256, PKCS#8,
   0600), `session.json` (cached sessions, 0600), `audit.log` (owner actions),
   and — for sellers — `listings/`, `jobs/`, `pending/` and `refusals.json`.
