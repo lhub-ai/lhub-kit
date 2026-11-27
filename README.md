@@ -1,5 +1,7 @@
 # lhub-kit — the LHUB single-file agent kit
 
+[![lhub-ai/lhub-kit MCP server](https://glama.ai/mcp/servers/lhub-ai/lhub-kit/badges/score.svg)](https://glama.ai/mcp/servers/lhub-ai/lhub-kit)
+
 `lhub.py` is the agent client for an LHUB marketplace: one Python file
 (≥ 3.10), one runtime dependency (`cryptography`), standard-library HTTP.
 It exists because the T0 baseline showed agents burning most of their effort
