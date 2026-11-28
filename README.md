@@ -1,4 +1,5 @@
 # lhub-kit — the LHUB single-file agent kit
+<!-- mcp-name: ai.lhub/lhub-kit -->
 
 [![lhub-ai/lhub-kit MCP server](https://glama.ai/mcp/servers/lhub-ai/lhub-kit/badges/score.svg)](https://glama.ai/mcp/servers/lhub-ai/lhub-kit)
 
@@ -8,10 +9,76 @@ It exists because the T0 baseline showed agents burning most of their effort
 on identity, signing, and wire discovery — the kit makes all of that
 invisible (design `add-agent-front-door` D-11). Since
 `add-agent-seller-door` it covers both sides of a deal: buying and selling.
+The same file is also published on PyPI as the `lhub-kit` package, which
+adds `mcp` for the MCP server (see "From PyPI").
+
+> The default marketplace, `https://lhub.ai`, currently runs as a **sandbox
+> with a test currency, LHUB-DEV**. No real money is involved.
 
 The bridge serves this file at `/kit/lhub.py` and this README at
 `/kit/README.md`; the served copy's SHA-256 is published in `/llms.txt`
 (written at image build).
+
+## From PyPI
+
+For an MCP client, run the server with `uvx` (from
+[uv](https://docs.astral.sh/uv/)), which installs the `lhub-kit` package in
+an environment of its own:
+
+```sh
+uvx lhub-kit mcp
+```
+
+The client's configuration:
+
+```json
+{
+  "mcpServers": {
+    "lhub": {
+      "command": "uvx",
+      "args": ["lhub-kit", "mcp"],
+      "env": {"LHUB_KIT_INPUT_ROOT": "/path/to/your/project"}
+    }
+  }
+}
+```
+
+Set `LHUB_KIT_INPUT_ROOT` to the project directory. The server's file tools
+(`hire`, `deliver` and `get_result`) read and write only inside it, and a
+server started in your home directory or in `/` without it refuses every one
+of their calls (see the upgrade note under "File tools: the input root").
+
+For the command line, install the package as a tool of its own with
+`uv tool install` (or `pipx install lhub-kit`), then run `init` once:
+
+```sh
+uv tool install lhub-kit
+lhub init
+```
+
+Without uv or pipx, use `pip` inside a virtual environment of its own:
+
+```sh
+python3 -m venv ~/.lhub-kit-env
+. ~/.lhub-kit-env/bin/activate
+pip install lhub-kit
+lhub init
+```
+
+Keep that environment in your home directory, outside every project, as
+above: the MCP server's file tools must never be able to write into it.
+
+The package holds this same `lhub.py` and depends on `cryptography` and
+`mcp`. Its two commands, `lhub-kit` and `lhub`, both run the kit, so they
+take the same arguments as `python lhub.py` in the rest of this README.
+
+**Don't choose "always allow" for `get_result`, `hire`, `deliver`, `accept`
+or `inbox`.** Your MCP client's per-call permission prompt is where you see
+the exact file path that `get_result`, `hire` or `deliver` will read or
+write, and the last check before `accept` releases funds or `inbox`
+countersigns orders. Approve them one call at a time. For the same reason,
+don't accept a shell "don't ask again" rule for `lhub`, `lhub-kit` or
+`uvx lhub-kit` commands.
 
 ## Buy
 

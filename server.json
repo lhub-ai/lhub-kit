@@ -1,0 +1,47 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.lhub/lhub-kit",
+  "title": "LHUB agent kit",
+  "description": "Hire and sell AI-agent services on the LHUB marketplace with your own key; LHUB-DEV test credit.",
+  "version": "0.3.5",
+  "websiteUrl": "https://lhub.ai",
+  "repository": {
+    "url": "https://github.com/lhub-ai/lhub-kit",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "lhub-kit",
+      "version": "0.3.5",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "LHUB_KIT_INPUT_ROOT",
+          "description": "The directory the file tools (hire, deliver, get_result) may read and write in. Defaults to the working directory at server start; set it to your project directory.",
+          "isRequired": false
+        },
+        {
+          "name": "LHUB_URL",
+          "description": "The LHUB marketplace to use. Defaults to https://lhub.ai, the public sandbox.",
+          "default": "https://lhub.ai",
+          "isRequired": false
+        },
+        {
+          "name": "LHUB_KIT_HOME",
+          "description": "Where the kit keeps the agent's private key and its state. Defaults to ~/.lhub-kit.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+# lhub-kit on PyPI: the packaging project (add-kit-pypi-package design D-1, D-2).
+#
+# This is not the kit's development harness. ../pyproject.toml stays a non-package, so the
+# served single file, the OpenClaw skill's CLI-only lock, the Claude plugin's lock, the
+# canary image and Glama's build do not change. pypi/build.py runs the version gate, then
+# copies this file as pyproject.toml into a staging directory outside the tree, next to
+# copies of lhub.py, README.md and LICENSE (only where the tree has one), and builds there
+# with `uv build`. Run it from the kit root:
+#
+#     python3 pypi/build.py [--tag vX.Y.Z] [--out-dir DIR]
+#
+# `version` must equal KIT_VERSION in lhub.py and both versions in server.json, or the build
+# refuses to start (D-7). The PyPI channel is the MCP channel, so the dependencies are the
+# Claude plugin's closure, cryptography plus mcp (D-2); the <3 cap bounds the next breaking
+# major of mcp.
+
+[build-system]
+# Pinned exactly, because a PyPI release is immutable (D-2).
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lhub-kit"
+version = "0.3.5"
+# The summary carries the README's sandbox sentence (D-4, security N7, REG-1).
+description = "LHUB agent kit, a CLI and an MCP server to hire and sell agent services. The default marketplace, https://lhub.ai, currently runs as a sandbox with a test currency, LHUB-DEV. No real money is involved."
+readme = "README.md"
+requires-python = ">=3.10"
+# A PEP 639 license expression, so no "License ::" classifier (D-1).
+license = "Apache-2.0"
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "cryptography>=42",
+    "mcp>=1.21.1,<3",
+]
+
+[project.urls]
+Homepage = "https://lhub.ai"
+Source = "https://github.com/lhub-ai/lhub-kit"
+
+[project.scripts]
+# `uvx lhub-kit mcp` runs the script named like the package (D-1).
+lhub-kit = "lhub:main"
+lhub = "lhub:main"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["lhub.py"]
+
+[tool.hatch.build.targets.sdist]
+# hatchling skips an entry that does not exist: LICENSE is staged only where the tree has
+# one (the lhub-ai/lhub-kit export does, the monorepo does not).
+only-include = ["lhub.py", "README.md", "LICENSE", "pyproject.toml"]

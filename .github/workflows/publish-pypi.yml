@@ -1,0 +1,100 @@
+# Publish lhub-kit to PyPI through Trusted Publishing (add-kit-pypi-package design D-7).
+#
+# In the LHUB monorepo this file sits under clients/lhub-kit/, where GitHub never runs it:
+# only a repository's root .github/ is read. The lhub-ai/lhub-kit export copies it to that
+# repository's root, where pushing a v* tag publishes.
+#
+# Three jobs, each on its own runner (security N4):
+# - test runs the kit's tests. The locked dev closure never runs where dist/ is produced.
+# - build runs only checkout, setup-uv and pypi/build.py. Its version gate runs before
+#   anything is built (tag without the v == pypi/pyproject.toml version == KIT_VERSION in
+#   lhub.py == both server.json versions), and the archives are checked after building.
+# - publish runs only for a v* tag and only after test and build, in the pypi environment,
+#   and is the only job allowed an OIDC token. PyPI accepts an upload from this workflow and
+#   environment alone, so no PyPI credential exists anywhere.
+#
+# Every action is pinned to a full commit, with its release tag in the comment beside it.
+# setup-uv's require-checksums makes the uv archive match a checksum bundled in that pinned
+# commit, and a publishing workflow uses no cache. The tag ref name reaches the shell only
+# through the runner's own GITHUB_REF_NAME environment variable, never through an
+# expression inside a script.
+
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test:
+    name: Test the kit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.9"
+          require-checksums: "true"
+          enable-cache: "false"
+      - name: Test the kit
+        run: uv run --frozen pytest -q
+
+  build:
+    name: Build and check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.9"
+          require-checksums: "true"
+          enable-cache: "false"
+      - name: Version gate and build, tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3.12 pypi/build.py --tag "$GITHUB_REF_NAME"
+      - name: Version gate and build, no tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: python3.12 pypi/build.py
+      - name: Upload the distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Publish through Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
