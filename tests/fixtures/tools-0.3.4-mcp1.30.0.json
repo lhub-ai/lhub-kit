@@ -1,0 +1,426 @@
+{
+ "kit": "0.3.4",
+ "mcp": "1.30.0",
+ "tools": [
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Find services"
+   },
+   "description": "Search the LHUB marketplace for service listings.",
+   "inputSchema": {
+    "properties": {
+     "category": {
+      "default": "",
+      "title": "Category",
+      "type": "string"
+     },
+     "free_text": {
+      "default": "",
+      "title": "Free Text",
+      "type": "string"
+     },
+     "limit": {
+      "default": 10,
+      "title": "Limit",
+      "type": "integer"
+     }
+    },
+    "title": "mcp_find_servicesArguments",
+    "type": "object"
+   },
+   "name": "find_services",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_find_servicesDictOutput",
+    "type": "object"
+   },
+   "title": "Find services"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": false,
+    "title": "Hire a service"
+   },
+   "description": "Hire a listing: open a deal, upload the input file, sign within max_price, wait.\n\n    input_path must stay inside the server's input root (the working directory\n    at server start, or $LHUB_KIT_INPUT_ROOT), with no '..' and no path\n    component that starts with '.'.\n    ",
+   "inputSchema": {
+    "properties": {
+     "input_path": {
+      "title": "Input Path",
+      "type": "string"
+     },
+     "listing_id": {
+      "title": "Listing Id",
+      "type": "string"
+     },
+     "max_price": {
+      "title": "Max Price",
+      "type": "string"
+     },
+     "provider": {
+      "default": "",
+      "title": "Provider",
+      "type": "string"
+     },
+     "quantity": {
+      "default": 0,
+      "title": "Quantity",
+      "type": "integer"
+     },
+     "timeout_seconds": {
+      "default": 180,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "listing_id",
+     "input_path",
+     "max_price"
+    ],
+    "title": "mcp_hireArguments",
+    "type": "object"
+   },
+   "name": "hire",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_hireDictOutput",
+    "type": "object"
+   },
+   "title": "Hire a service"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Request owner confirmation link"
+   },
+   "description": "Get a one-time approval link for a deal you hired that waits in AWAITING_CONFIRM.\n\n    A hire that stops in AWAITING_CONFIRM already returns one: give the user the\n    link `hire` returned, to open themselves; call `owner_link` (no separate\n    go-ahead \u2014 it moves no money) only when `hire` returned none, or later on the\n    user's request or after expiry, so one hire mints one link. Never open, fetch\n    or POST the link yourself, with any tool; only the user opens it. Each link\n    works once, until its expires_at; calling again replaces it.\n    ",
+   "inputSchema": {
+    "properties": {
+     "deal_id": {
+      "title": "Deal Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "deal_id"
+    ],
+    "title": "mcp_owner_linkArguments",
+    "type": "object"
+   },
+   "name": "owner_link",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_owner_linkDictOutput",
+    "type": "object"
+   },
+   "title": "Request owner confirmation link"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Get result"
+   },
+   "description": "Download the deliverable for a deal, verify it against the proof hash, save it.\n\n    out_path must name a file inside the server's input root (the working\n    directory at server start, or $LHUB_KIT_INPUT_ROOT; a relative path is\n    relative to it), with no '..', no path component that starts with '.',\n    no CLAUDE.md, CLAUDE.local.md or AGENTS.md, and no uv.toml,\n    pyproject.toml, setup.cfg, pip.conf or requirements*.txt; any other path\n    is refused before the download.\n    ",
+   "inputSchema": {
+    "properties": {
+     "deal_id": {
+      "title": "Deal Id",
+      "type": "string"
+     },
+     "out_path": {
+      "title": "Out Path",
+      "type": "string"
+     },
+     "timeout_seconds": {
+      "default": 60,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "deal_id",
+     "out_path"
+    ],
+    "title": "mcp_get_resultArguments",
+    "type": "object"
+   },
+   "name": "get_result",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_get_resultDictOutput",
+    "type": "object"
+   },
+   "title": "Get result"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "openWorldHint": true,
+    "readOnlyHint": false,
+    "title": "Accept delivery"
+   },
+   "description": "Accept a verified deliverable, releasing escrowed funds to the provider.",
+   "inputSchema": {
+    "properties": {
+     "deal_id": {
+      "title": "Deal Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "deal_id"
+    ],
+    "title": "mcp_acceptArguments",
+    "type": "object"
+   },
+   "name": "accept",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_acceptDictOutput",
+    "type": "object"
+   },
+   "title": "Accept delivery"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "openWorldHint": true,
+    "readOnlyHint": false,
+    "title": "Dispute deal"
+   },
+   "description": "Open a dispute on a deal (freezes it for arbitration).",
+   "inputSchema": {
+    "properties": {
+     "deal_id": {
+      "title": "Deal Id",
+      "type": "string"
+     },
+     "reason": {
+      "title": "Reason",
+      "type": "string"
+     }
+    },
+    "required": [
+     "deal_id",
+     "reason"
+    ],
+    "title": "mcp_disputeArguments",
+    "type": "object"
+   },
+   "name": "dispute",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_disputeDictOutput",
+    "type": "object"
+   },
+   "title": "Dispute deal"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Get balance"
+   },
+   "description": "Read this agent's LHUB-DEV balance.",
+   "inputSchema": {
+    "properties": {},
+    "title": "mcp_balanceArguments",
+    "type": "object"
+   },
+   "name": "balance",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_balanceDictOutput",
+    "type": "object"
+   },
+   "title": "Get balance"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Create listing"
+   },
+   "description": "List a service: build the core locally, sign it, create and activate the listing.",
+   "inputSchema": {
+    "properties": {
+     "category": {
+      "title": "Category",
+      "type": "string"
+     },
+     "deliverable_desc": {
+      "default": "",
+      "title": "Deliverable Desc",
+      "type": "string"
+     },
+     "deliverable_type": {
+      "default": "",
+      "title": "Deliverable Type",
+      "type": "string"
+     },
+     "input_desc": {
+      "default": "",
+      "title": "Input Desc",
+      "type": "string"
+     },
+     "input_types": {
+      "default": "",
+      "title": "Input Types",
+      "type": "string"
+     },
+     "min_charge": {
+      "default": "",
+      "title": "Min Charge",
+      "type": "string"
+     },
+     "model": {
+      "default": "per_unit",
+      "title": "Model",
+      "type": "string"
+     },
+     "price": {
+      "title": "Price",
+      "type": "string"
+     },
+     "summary": {
+      "title": "Summary",
+      "type": "string"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     },
+     "turnaround_hours": {
+      "default": 24,
+      "title": "Turnaround Hours",
+      "type": "integer"
+     },
+     "unit": {
+      "title": "Unit",
+      "type": "string"
+     }
+    },
+    "required": [
+     "category",
+     "title",
+     "summary",
+     "price",
+     "unit"
+    ],
+    "title": "mcp_sellArguments",
+    "type": "object"
+   },
+   "name": "sell",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_sellDictOutput",
+    "type": "object"
+   },
+   "title": "Create listing"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "List my listings"
+   },
+   "description": "List this agent's own (non-retired) service listings.",
+   "inputSchema": {
+    "properties": {},
+    "title": "mcp_my_listingsArguments",
+    "type": "object"
+   },
+   "name": "my_listings",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_my_listingsDictOutput",
+    "type": "object"
+   },
+   "title": "List my listings"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": false,
+    "title": "Check seller inbox"
+   },
+   "description": "Poll the seller inbox once: countersign matching proposals, fetch funded inputs.",
+   "inputSchema": {
+    "properties": {
+     "countersign": {
+      "default": true,
+      "title": "Countersign",
+      "type": "boolean"
+     }
+    },
+    "title": "mcp_inboxArguments",
+    "type": "object"
+   },
+   "name": "inbox",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_inboxDictOutput",
+    "type": "object"
+   },
+   "title": "Check seller inbox"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": true,
+    "readOnlyHint": false,
+    "title": "Deliver result"
+   },
+   "description": "Upload a deliverable file for a funded deal and submit its Tier-0 proof.\n\n    file_path must stay inside the server's input root (the working directory\n    at server start, or $LHUB_KIT_INPUT_ROOT), with no '..' and no path\n    component that starts with '.'.\n    ",
+   "inputSchema": {
+    "properties": {
+     "deal_id": {
+      "title": "Deal Id",
+      "type": "string"
+     },
+     "file_path": {
+      "title": "File Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "deal_id",
+     "file_path"
+    ],
+    "title": "mcp_deliverArguments",
+    "type": "object"
+   },
+   "name": "deliver",
+   "outputSchema": {
+    "additionalProperties": true,
+    "title": "mcp_deliverDictOutput",
+    "type": "object"
+   },
+   "title": "Deliver result"
+  }
+ ]
+}

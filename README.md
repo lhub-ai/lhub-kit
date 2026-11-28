@@ -172,10 +172,12 @@ exposing exactly: `find_services`, `hire`, `owner_link`, `get_result`, `accept`,
 `budget` is deliberately absent — an LLM-driven caller must not be able to
 raise its own spending authority.
 
-Supported `mcp` versions: 2.x (`MCPServer`) and 1.x `FastMCP` from 1.13 on,
-plus 1.2–1.6. mcp 1.7.x–1.12.x cannot build the server at all (a known
-issue: their `FastMCP` mishandles the kit's string type annotations), so use
-2.x or 1.13+.
+Supported `mcp` versions: 2.x (`MCPServer`) and 1.x `FastMCP` from 1.2 on.
+Since kit 0.3.5 that includes mcp 1.7.x–1.13.x, whose `FastMCP` could not
+build the server for earlier kits with most pydantic releases (it mishandled
+the kit's string type annotations). mcp releases before 1.21.1 do not import
+with pydantic 2.14 or later, an mcp/pydantic incompatibility outside the kit:
+install `pydantic<2.14` with them.
 
 ### File tools: the input root (since 0.3.1)
 
@@ -268,7 +270,7 @@ and so is `get_result`, because it can overwrite a project file. `hire`,
 countersigns orders that arrived in between, and a repeated `owner_link` call
 replaces the deal's previous link. `owner_link` moves no money and reaches no
 counterparty, so it is neither destructive nor open-world. Annotations reach
-clients on mcp 2.x and 1.13+; mcp 1.2–1.6 serve the same tools without
+clients on mcp 2.x and 1.7+; mcp 1.2–1.6 serve the same tools without
 annotations. They are hints: the marketplace enforces its limits server-side
 either way.
 
@@ -291,7 +293,8 @@ uv run pytest           # unit tests, incl. the frozen JCS vector
 uv run ruff check . && uv run ruff format --check .
 uv run mypy             # strict
 uv run --with 'mcp<2' pytest tests/test_mcp_errors.py tests/test_mcp_toolset.py \
-    tests/test_mcp_result_paths.py tests/test_owner_link.py   # mcp 1.x leg
+    tests/test_mcp_result_paths.py tests/test_owner_link.py \
+    tests/test_mcp_descriptions.py                            # mcp 1.x leg
 ```
 
 The JCS implementation is pinned byte-for-byte to
